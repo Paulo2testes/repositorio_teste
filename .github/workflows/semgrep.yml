@@ -24,10 +24,6 @@ jobs:
       security-events: write # for github/codeql-action/upload-sarif to upload SARIF results
       actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
 
-    container:
-      # A Docker image with Semgrep installed. Do not change this.
-      image: semgrep/semgrep
-
     steps:
       # Checkout project source
       - name: Checkout repository
@@ -42,19 +38,16 @@ jobs:
             ${{ runner.os }}-pip-semgrep
 
       - name: Run Semgrep Scan
-        run: |
-            semgrep scan \
-            --pro \
-            --config="p/security-audit" \
-            --config="p/python" \
-            --config="p/owasp-top-ten" \
-            --sarif \
-            --output="semgrep-results.sarif" \
-        env:
-          # Connect to Semgrep AppSec Platform through your SEMGREP_APP_TOKEN.
-          # Generate a token from Semgrep AppSec Platform > Settings
-          # and add it to your GitHub secrets.
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        uses: semgrep/semgrep-action@v1
+        with:
+          publishToken: ${{ secrets.SEMGREP_APP_TOKEN }}
+          generateSarif: "1"
+          sarif_output: "semgrep-results.sarif"
+          metrics: "off"
+          config: >-
+            p/security-audit
+            p/python
+            p/owasp-top-ten
       
 
       # Upload SARIF file generated in previous step
