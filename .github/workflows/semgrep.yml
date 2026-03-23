@@ -5,9 +5,6 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  #schedule:
-  #  - cron: '29 0 * * 1'
-
   workflow_dispatch:
 
 permissions:
@@ -15,17 +12,18 @@ permissions:
 
 jobs:
   semgrep:
-
     name: Scan
     runs-on: ubuntu-latest
 
     permissions:
-      contents: read # for actions/checkout to fetch code
-      security-events: write # for github/codeql-action/upload-sarif to upload SARIF results
-      actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
+      contents: read
+      security-events: write
+      actions: read
+
+    container:
+      image: semgrep/semgrep
 
     steps:
-      # Checkout project source
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -38,33 +36,67 @@ jobs:
             ${{ runner.os }}-pip-semgrep
 
       - name: Run Semgrep Scan
-        uses: semgrep/semgrep-action@v1
-        with:
-          publishToken: ${{ secrets.SEMGREP_APP_TOKEN }}
-          generateSarif: "1"
-          sarif_output: "semgrep-results.sarif"
-          metrics: "off"
-          config: >-
-            p/security-audit
-            p/python
-            p/owasp-top-ten
-      
+        run: |
+            semgrep scan \
+            --pro \
+            --config="p/security-audit" \
+            --config="p/python" \
+            --config="p/owasp-top-ten" \
+            --sarif \
+            --output="semgrep-results.sarif" \
+            --metrics=off \
+            --error
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
-      # Upload SARIF file generated in previous step
+      # NOVO PASSO: Traduz o level do Semgrep para severidade do GitHub
+      - name: Fix SARIF Severity Levels
+        if: always()
+        run: |
+          python3 -c "
+          import json
+          import os
+
+          if not os.path.exists('semgrep-results.sarif'):
+              print('Arquivo SARIF não encontrado.')
+              exit(0)
+
+          with open('semgrep-results.sarif', 'r') as f:
+              data = json.load(f)
+
+          # Mapeamento para o GitHub (Score de 0 a 10)
+          sev_map = {
+              'ERROR': '8.5',   # High
+              'WARNING': '5.5', # Medium
+              'NOTE': '2.5',    # Low
+              'NONE': '0.0'
+          }
+
+          for run in data.get('runs', []):
+              rules = run.get('tool', {}).get('driver', {}).get('rules', [])
+              for rule in rules:
+                  # Pega o 'level' que você identificou no seu arquivo
+                  default_level = rule.get('defaultConfiguration', {}).get('level', 'warning').upper()
+                  
+                  # Injeta a propriedade que o GitHub usa para classificar severidade
+                  if 'properties' not in rule:
+                      rule['properties'] = {}
+                  
+                  rule['properties']['security-severity'] = sev_map.get(default_level, '5.5')
+
+          with open('semgrep-results.sarif', 'w') as f:
+              json.dump(data, f, indent=2)
+          "
+
       - name: Upload SARIF to GitHub Security
         if: always()
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep-results.sarif
 
-      # Save SARIF 
       - name: Save SARIF as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: semgrep-report
           path: semgrep-results.sarif
-        #Available Options:
-        #  warn: Output a warning but do not fail the action
-        #  error: Fail the action with an error message
-        #  ignore: Do not output any warnings or errors, the action does not fail
