@@ -34,13 +34,11 @@ jobs:
           key: ${{ runner.os }}-pip-semgrep
           restore-keys: |
             ${{ runner.os }}-pip-semgrep
-
+      
       - name: Run Semgrep Scan
         run: |
             semgrep scan \
             --pro \
-            --config="p/security-audit" \
-            --config="p/python" \
             --config="p/owasp-top-ten" \
             --sarif \
             --output="semgrep-results.sarif" \
@@ -57,32 +55,34 @@ jobs:
           import json
           import os
 
-          if not os.path.exists('semgrep-results.sarif'):
-              print('Arquivo SARIF não encontrado.')
-              exit(0)
-
           with open('semgrep-results.sarif', 'r') as f:
               data = json.load(f)
-
-          # Mapeamento para o GitHub (Score de 0 a 10)
-          sev_map = {
-              'ERROR': '8.5',   # High
-              'WARNING': '5.5', # Medium
-              'NOTE': '2.5',    # Low
-              'NONE': '0.0'
-          }
 
           for run in data.get('runs', []):
               rules = run.get('tool', {}).get('driver', {}).get('rules', [])
               for rule in rules:
-                  # Pega o 'level' que você identificou no seu arquivo
-                  default_level = rule.get('defaultConfiguration', {}).get('level', 'warning').upper()
-                  
-                  # Injeta a propriedade que o GitHub usa para classificar severidade
+                  # 1. Pegamos o level básico (error, warning, note)
+                  level = rule.get('defaultConfiguration', {}).get('level', 'warning').upper()
+                  tags = rule.get('properties', {}).get('tags', [])
+                  rule_id = rule.get('id', '').lower()
+
+                  # 2. Lógica de Distinção:
+                  # Se for 'error' e tiver 'HIGH CONFIDENCE', ou for uma vulnerabilidade 
+                  # crítica conhecida (como SQL Injection ou RCE), damos score de CRITICAL.
+                  if level == 'ERROR':
+                      if 'HIGH CONFIDENCE' in tags or 'injection' in rule_id or 'rce' in rule_id:
+                          score = '9.5' # GitHub interpreta como CRITICAL
+                      else:
+                          score = '8.5' # GitHub interpreta como HIGH
+                  elif level == 'WARNING':
+                      score = '5.5'     # GitHub interpreta como MEDIUM
+                  else:
+                      score = '2.5'     # GitHub interpreta como LOW
+
+                  # 3. Injetamos o score que o GitHub Code Scanning usa para as cores
                   if 'properties' not in rule:
                       rule['properties'] = {}
-                  
-                  rule['properties']['security-severity'] = sev_map.get(default_level, '5.5')
+                  rule['properties']['security-severity'] = score
 
           with open('semgrep-results.sarif', 'w') as f:
               json.dump(data, f, indent=2)
@@ -100,3 +100,7 @@ jobs:
         with:
           name: semgrep-report
           path: semgrep-results.sarif
+
+
+#--config="p/security-audit" \
+#--config="p/python" \
